@@ -9,9 +9,11 @@ from typing import List
 
 import torch
 from torch import Tensor
-from torch.distributed import all_gather as all_gather_no_backprop
-from torch.distributed.nn.functional import all_gather as all_gather_with_backprop
-
+#from torch.distributed import all_gather as all_gather_no_backprop
+#from torch.distributed.nn.functional import all_gather as all_gather_with_backprop
+from torch_xla.core.xla_model import all_gather as all_gather_no_backprop
+from torch_xla.core.functions import all_gather as all_gather_with_backprop
+import torch_xla.core.xla_model as xm
 
 class BackpropType(Enum):
     """
@@ -40,11 +42,15 @@ def gather_tensor(
     Returns:
         List[Tensor]: List of gathered tensors across all GPUs.
     """
-    world_size = torch.distributed.get_world_size()
-
+    world_size = xm.xrt_world_size()
+    print(f"In gather_tensor with {world_size}")
     # This uses the all_gather from torch.distributed.nn.functional,
     # which backpropagates gradients to all workers
+    if world_size == 1:
+        return tensor
+
     if backprop_type == BackpropType.GLOBAL:
+        print(f"{backprop_type = }")
         return all_gather_with_backprop(tensor)
 
     else:
@@ -80,7 +86,8 @@ def concat_gather_all_gpu(
 
     tensors_all_gpus = gather_tensor(tensor, backprop_type)
 
-    return torch.cat(tensors_all_gpus, dim=dim)
+    return tensors_all_gpus
+    #return torch.cat(tensors_all_gpus, dim=dim)
 
 
 def get_rank() -> int:

@@ -13,6 +13,7 @@ import torch.nn.functional as F
 from torch import nn, Tensor
 from torchmultimodal.utils.distributed import BackpropType, gather_tensor
 
+import torch_xla.core.xla_model as xm
 
 @dataclass
 class ContrastiveLossOutput(OrderedDict):
@@ -28,21 +29,27 @@ def _gather_embeddings_and_labels(
     embeddings_b: Tensor,
     backprop_type: BackpropType = BackpropType.GLOBAL,
 ) -> Tuple[Tensor, Tensor, Tensor]:
-    if not torch.distributed.is_available() or not torch.distributed.is_initialized():
-        labels = torch.arange(embeddings_a.size(0), device=embeddings_a.device)
-        return embeddings_a, embeddings_b, labels
-
+#    if not torch.distributed.is_available() or not torch.distributed.is_initialized():
+#        labels = torch.arange(embeddings_a.size(0), device=embeddings_a.device)
+#        print('In number 1')
+#        return embeddings_a, embeddings_b, labels
+    print('In number 2')
     embeddings_a_all_gpus = gather_tensor(embeddings_a, backprop_type)
     embeddings_b_all_gpus = gather_tensor(embeddings_b, backprop_type)
+    #print(f"{embeddings_a_all_gpus = }")
+    #print(f"{embeddings_b_all_gpus = }")
     # embeddings_a has shape [local_batch_size, embedding_dim]
     local_batch_size = embeddings_a.size(0)
-    labels = local_batch_size * torch.distributed.get_rank() + torch.arange(
+    labels = local_batch_size * xm.get_ordinal() + torch.arange(
         local_batch_size, device=embeddings_a.device
     )
+    print(f"{labels = }")
 
     return (
-        torch.cat(embeddings_a_all_gpus),
-        torch.cat(embeddings_b_all_gpus),
+        #torch.cat(embeddings_a_all_gpus),
+        embeddings_a_all_gpus,
+        #torch.cat(embeddings_b_all_gpus),
+        embeddings_b_all_gpus,
         labels,
     )
 
@@ -87,12 +94,20 @@ def contrastive_loss_with_temperature(
     ) = _gather_embeddings_and_labels(embeddings_a, embeddings_b, backprop_type)
 
     # logits_per_image has shape [local_batch_size, global_batch_size]
+    print("PRinting shapes")
+    print(f"{embeddings_a_all_gpus.shape = }")
+    print(f"{embeddings_b_all_gpus.shape = }")
+    
     logits_per_input_a = (
         torch.matmul(embeddings_a, embeddings_b_all_gpus.transpose(0, 1)) * temperature
     )
+
     logits_per_input_b = (
         torch.matmul(embeddings_b, embeddings_a_all_gpus.transpose(0, 1)) * temperature
     )
+    print(f"{logits_per_input_a.shape = }")
+    print(f"{logits_per_input_b.shape = }")
+    print(f"{mask = }")
 
     if mask is not None:
         logits_per_input_a = logits_per_input_a[mask]
@@ -101,6 +116,8 @@ def contrastive_loss_with_temperature(
 
     if cross_entropy_kwargs is None:
         cross_entropy_kwargs = {}
+
+    print(f"{labels = }")
 
     loss_a = F.cross_entropy(logits_per_input_a, labels, **cross_entropy_kwargs)
     loss_b = F.cross_entropy(logits_per_input_b, labels, **cross_entropy_kwargs)
