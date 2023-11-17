@@ -43,14 +43,12 @@ def gather_tensor(
         List[Tensor]: List of gathered tensors across all GPUs.
     """
     world_size = xm.xrt_world_size()
-    print(f"In gather_tensor with {world_size}")
     # This uses the all_gather from torch.distributed.nn.functional,
     # which backpropagates gradients to all workers
     if world_size == 1:
         return tensor
 
     if backprop_type == BackpropType.GLOBAL:
-        print(f"{backprop_type = }")
         return all_gather_with_backprop(tensor)
 
     else:
